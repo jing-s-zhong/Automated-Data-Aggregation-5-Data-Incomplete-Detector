@@ -30,24 +30,13 @@ CREATE OR REPLACE TABLE BUYSIDE_ACCOUNT_DATA_TRACKING
 COMMENT = 'This table is used for buyside account data incomplete detection'
 ;
 
---
--- Check the existing task names in case overwrite it accidently
--- 
-SHOW TASKS;
-
---
--- For update the task, suspend it if exists
---
-ALTER TASK IF EXISTS POPULATE_BUYSIDE_ACCOUNT_DATA_TRACKING SUSPEND;
-
-
---
--- Setup a task to append the data daily at 8:45am PST
---
-CREATE OR REPLACE TASK POPULATE_BUYSIDE_ACCOUNT_DATA_TRACKING
-    WAREHOUSE = S1_BI
-    SCHEDULE = 'USING CRON 40 5-18 * * * America/Los_Angeles'
+-- CALL ALERTS.BUYSIDE_ACCOUNT_DATA_TRACKING_SCHEDULER ();
+CREATE OR REPLACE PROCEDURE BUYSIDE_ACCOUNT_DATA_TRACKING_SCHEDULER ()
+RETURNS VARCHAR
+LANGUAGE JAVASCRIPT
 AS
+$$
+var snowRet = '', snowSql = `
 MERGE INTO BUYSIDE_ACCOUNT_DATA_TRACKING D
 USING (
   WITH SCOPED_DATA AS (
@@ -201,7 +190,7 @@ WHEN MATCHED THEN UPDATE SET
     ,DIFF_AMOUNT = S.DIFF_AMOUNT
     ,DIFF_PERCENTAGE = S.DIFF_PERCENTAGE
     ,SPEND_FOUND_TIME = CASE WHEN ((D.SPEND_FOUND_TIME IS NULL) != (S.SPEND_FOUND_TIME IS NULL)) THEN S.SPEND_FOUND_TIME ELSE D.SPEND_FOUND_TIME END
-    ,ALERT_STATUS = S.ALERT_STATUS AND D.ALERT_ALLOWED
+    ,ALERT_STATUS = S.ALERT_STATUS AND D.ALERT_ALLOWED AND COALESCE(D.ALERT_STATUS, S.SPEND_FOUND_TIME IS NOT NULL)
 WHEN NOT MATCHED THEN INSERT (
     DATA_DATE
     --,PRODUCT_LINE_ID
@@ -234,6 +223,40 @@ WHEN NOT MATCHED THEN INSERT (
     ,S.ALERT_STATUS
     ,S.ALERT_ALLOWED
     )
+;`;
+
+try {
+  snowflake.execute({ sqlText: snowSql});
+  snowRet = "Succeeded."
+  }
+catch (err) {
+  snowRet = "Failed: " + err
+  }
+finally {
+  return snowRet.toString()
+  }
+$$
+;
+
+--
+-- Check the existing task names in case overwrite it accidently
+-- 
+SHOW TASKS;
+
+--
+-- For update the task, suspend it if exists
+--
+ALTER TASK IF EXISTS POPULATE_BUYSIDE_ACCOUNT_DATA_TRACKING SUSPEND;
+
+
+--
+-- Setup a task to append the data daily at 8:45am PST
+--
+CREATE OR REPLACE TASK POPULATE_BUYSIDE_ACCOUNT_DATA_TRACKING
+    WAREHOUSE = S1_BI
+    SCHEDULE = 'USING CRON 40 5-18 * * * America/Los_Angeles'
+AS
+CALL ALERTS.BUYSIDE_ACCOUNT_DATA_TRACKING_SCHEDULER ()
 ;
 
 --
